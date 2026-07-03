@@ -10,17 +10,17 @@ import os from 'os';
 import { execa, execaSync } from 'execa';
 import crypto from 'crypto';
 import ora from 'ora';
-import fs from 'fs/promises';
+import fs from 'fs';
+import fs$1 from 'fs/promises';
 import { dir } from 'tmp-promise';
 import { fileTypeFromBuffer } from 'file-type';
 import icongen from 'icon-gen';
 import sharp from 'sharp';
 import * as psl from 'psl';
 import { InvalidArgumentError, program as program$1, Option } from 'commander';
-import fs$1 from 'fs';
 
 var name = "pake-cli";
-var version = "3.12.1";
+var version = "3.13.0";
 var description = "🤱🏻 Turn any webpage into a desktop app with one command. 🤱🏻 一键打包网页生成轻量桌面应用。";
 var engines = {
 	node: ">=18.0.0"
@@ -230,6 +230,93 @@ const { platform: platform$1 } = process;
 const IS_MAC = platform$1 === 'darwin';
 const IS_WIN = platform$1 === 'win32';
 const IS_LINUX = platform$1 === 'linux';
+// Distro IDs / ID_LIKE families that ship an RPM-based package manager.
+const RPM_FAMILY_IDS = new Set([
+    'rhel',
+    'fedora',
+    'centos',
+    'rocky',
+    'almalinux',
+    'ol', // Oracle Linux
+    'oracle',
+    'amzn', // Amazon Linux
+    'mariner',
+    'azurelinux',
+    'suse',
+    'opensuse',
+    'opensuse-leap',
+    'opensuse-tumbleweed',
+    'sles',
+]);
+// Distro IDs / ID_LIKE families that ship a DEB-based package manager.
+const DEB_FAMILY_IDS = new Set([
+    'debian',
+    'ubuntu',
+    'linuxmint',
+    'pop',
+    'elementary',
+    'kali',
+    'raspbian',
+    'devuan',
+]);
+// Parse the shell-style key=value pairs of an /etc/os-release file, stripping
+// the optional surrounding quotes around values.
+function parseOsRelease(content) {
+    const fields = {};
+    for (const rawLine of content.split('\n')) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('#'))
+            continue;
+        const separator = line.indexOf('=');
+        if (separator === -1)
+            continue;
+        const key = line.slice(0, separator).trim();
+        let value = line.slice(separator + 1).trim();
+        if (value.length >= 2 &&
+            ((value.startsWith('"') && value.endsWith('"')) ||
+                (value.startsWith("'") && value.endsWith("'")))) {
+            value = value.slice(1, -1);
+        }
+        if (key)
+            fields[key] = value;
+    }
+    return fields;
+}
+// Detect the package family from /etc/os-release. The distro's own ID wins over
+// ID_LIKE hints, and an unknown distro falls back to 'deb' to preserve Pake's
+// historical default. Accepts content directly so the decision is unit-testable
+// without a real /etc/os-release.
+function detectLinuxPackageFamily(osReleaseContent) {
+    let content = osReleaseContent;
+    if (content === undefined) {
+        try {
+            content = fs.readFileSync('/etc/os-release', 'utf-8');
+        }
+        catch {
+            return 'deb';
+        }
+    }
+    const fields = parseOsRelease(content);
+    const id = (fields.ID ?? '').toLowerCase().trim();
+    const idLike = (fields.ID_LIKE ?? '')
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(Boolean);
+    for (const token of [id, ...idLike]) {
+        if (DEB_FAMILY_IDS.has(token))
+            return 'deb';
+        if (RPM_FAMILY_IDS.has(token))
+            return 'rpm';
+    }
+    return 'deb';
+}
+// Default Linux bundle targets, chosen by the host distro's package family so
+// RPM-based distros (Fedora/RHEL/Oracle/Rocky/Alma/openSUSE) get a native .rpm
+// instead of a .deb their package manager cannot install. AppImage stays as a
+// universal fallback in both cases.
+function getDefaultLinuxTargets() {
+    return detectLinuxPackageFamily() === 'rpm' ? 'rpm,appimage' : 'deb,appimage';
+}
 
 async function shellExec(command, timeout = 300000, env) {
     try {
@@ -339,7 +426,7 @@ function checkRustInstalled() {
 async function combineFiles(files, output) {
     const contents = await Promise.all(files.map(async (file) => {
         if (file.endsWith('.css')) {
-            const fileContent = await fs.readFile(file, 'utf-8');
+            const fileContent = await fs$1.readFile(file, 'utf-8');
             return `window.addEventListener('DOMContentLoaded', (_event) => {
         const css = ${JSON.stringify(fileContent)};
         const style = document.createElement('style');
@@ -347,12 +434,12 @@ async function combineFiles(files, output) {
         document.head.appendChild(style);
       });`;
         }
-        const fileContent = await fs.readFile(file);
+        const fileContent = await fs$1.readFile(file);
         return ("window.addEventListener('DOMContentLoaded', (_event) => { " +
             fileContent +
             ' });');
     }));
-    await fs.writeFile(output, contents.join('\n'));
+    await fs$1.writeFile(output, contents.join('\n'));
     return files;
 }
 
@@ -1054,6 +1141,16 @@ class BaseBuilder {
                 throw retryError;
             }
         }
+        // With --no-bundle there is no installer to copy; surface the raw
+        // executable the build produced instead.
+        if (this.options.bundle === false) {
+            await this.copyRawBinary(npmDirectory, name);
+            if (logSuccess) {
+                logger.success('✔ Build success!');
+                logger.success('✔ Raw binary located in', path.resolve(this.getRawBinaryPath(name)));
+            }
+            return;
+        }
         // Copy app
         const fileName = this.getFileName();
         const fileType = this.getFileType(target);
@@ -1439,24 +1536,56 @@ class LinuxBuilder extends BaseBuilder {
         return `${name}_${version}_${arch}`;
     }
     async build(url) {
+        // --no-bundle: build the executable once with no per-format packaging loop.
+        if (this.options.bundle === false) {
+            await this.buildAndCopy(url, 'deb');
+            return;
+        }
         const targets = filterLinuxTargets(this.options.targets);
         if (targets.length === 0) {
             throw new Error(`No valid Linux target in "${this.options.targets}". Valid targets: ${LINUX_TARGET_TYPES.join(', ')}.`);
         }
         const useTemporaryDebForZst = needsTemporaryDebForZst(targets);
+        // With a single explicit target, fail fast. With multiple targets (the
+        // distro-aware default, or an explicit comma list) keep building the rest
+        // when one fails, so a usable installer is still produced, e.g. AppImage
+        // survives a .deb bundler abort on RPM-based distros.
+        const isolateFailures = targets.length > 1;
+        const failed = [];
+        let firstError = null;
         for (const target of targets) {
             this.currentBuildType = target;
-            if (target === 'zst') {
-                if (useTemporaryDebForZst) {
-                    await this.buildAndCopy(url, 'deb', false);
+            try {
+                if (target === 'zst') {
+                    if (useTemporaryDebForZst) {
+                        await this.buildAndCopy(url, 'deb', false);
+                    }
+                    await this.createArchPackageFromDeb({
+                        removeSourceDeb: useTemporaryDebForZst,
+                    });
                 }
-                await this.createArchPackageFromDeb({
-                    removeSourceDeb: useTemporaryDebForZst,
-                });
+                else {
+                    await this.buildAndCopy(url, target);
+                }
             }
-            else {
-                await this.buildAndCopy(url, target);
+            catch (error) {
+                const err = error instanceof Error ? error : new Error(String(error));
+                if (!isolateFailures) {
+                    throw err;
+                }
+                if (!firstError) {
+                    firstError = err;
+                }
+                failed.push(target);
+                logger.warn(`✼ Failed to build "${target}" target: ${err.message.split('\n')[0]}`);
             }
+        }
+        // Every requested target failed: surface the first real error.
+        if (firstError && failed.length === targets.length) {
+            throw firstError;
+        }
+        if (failed.length > 0) {
+            logger.warn(`✼ Skipped failed Linux targets: ${failed.join(', ')}. Other formats built successfully.`);
         }
     }
     async ensureArchPackagingTools() {
@@ -1570,6 +1699,11 @@ post_remove() {
             ? (this.getTauriTarget(this.buildArch, 'linux') ?? undefined)
             : undefined;
         let fullCommand = this.buildBaseCommand(packageManager, configPath, buildTarget);
+        // --no-bundle: build the executable only, skipping .deb/.rpm/.appimage
+        // packaging entirely (e.g. RPM-based distros where the bundler aborts).
+        if (this.options.bundle === false) {
+            return `${fullCommand} --no-bundle`;
+        }
         if (this.currentBuildType) {
             fullCommand += ` --bundles ${this.currentBuildType}`;
         }
@@ -2546,6 +2680,11 @@ async function handleOptions(options, url) {
     if (!options.internalUrlRegex && options.safeDomain) {
         appOptions.internalUrlRegex = safeDomainsToRegex(options.safeDomain);
     }
+    // --no-bundle is Linux-only; keep normal packaging on other platforms.
+    if (appOptions.bundle === false && platform !== 'linux') {
+        logger.warn('✼ --no-bundle is only supported on Linux; ignoring it.');
+        appOptions.bundle = true;
+    }
     const iconPath = await handleIcon(appOptions, url);
     appOptions.icon = iconPath || '';
     return appOptions;
@@ -2569,7 +2708,7 @@ const DEFAULT_PAKE_OPTIONS = {
     targets: (() => {
         switch (process.platform) {
             case 'linux':
-                return 'deb,appimage';
+                return getDefaultLinuxTargets();
             case 'darwin':
                 return 'dmg';
             case 'win32':
@@ -2588,6 +2727,7 @@ const DEFAULT_PAKE_OPTIONS = {
     incognito: false,
     wasm: false,
     enableDragDrop: false,
+    bundle: true,
     keepBinary: false,
     multiInstance: false,
     multiWindow: false,
@@ -2621,7 +2761,7 @@ function validateNumberInput(value) {
     return parsedValue;
 }
 function validateUrlInput(url) {
-    const isFile = fs$1.existsSync(url);
+    const isFile = fs.existsSync(url);
     if (!isFile) {
         try {
             return normalizeUrl(url);
@@ -2726,6 +2866,9 @@ ${green('|_|   \\__,_|_|\\_\\___|  can turn any webpage into a desktop app with 
         .hideHelp())
         .addOption(new Option('--keep-binary', 'Keep raw binary file alongside installer')
         .default(DEFAULT_PAKE_OPTIONS.keepBinary)
+        .hideHelp())
+        .addOption(new Option('--no-bundle', 'Skip packaging, output only the raw executable (Linux; for RPM distros where the bundler aborts)')
+        .default(DEFAULT_PAKE_OPTIONS.bundle)
         .hideHelp())
         .addOption(new Option('--multi-instance', 'Allow multiple app instances')
         .default(DEFAULT_PAKE_OPTIONS.multiInstance)

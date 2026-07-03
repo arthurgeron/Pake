@@ -2424,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "pake"
-version = "3.12.1"
+version = "3.13.0"
 dependencies = [
  "block2",
  "objc2",

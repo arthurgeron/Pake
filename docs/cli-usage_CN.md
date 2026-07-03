@@ -304,7 +304,7 @@ pake https://github.com --name GitHub
 
 指定构建目标架构或格式：
 
-- **Linux**: `deb`, `appimage`, `rpm`, `zst`, `deb-arm64`, `appimage-arm64`, `rpm-arm64`, `zst-arm64`（默认：`deb`, `appimage`）
+- **Linux**: `deb`, `appimage`, `rpm`, `zst`, `deb-arm64`, `appimage-arm64`, `rpm-arm64`, `zst-arm64`（默认：按发行版自适应，Debian/Ubuntu 为 `deb, appimage`，Fedora/RHEL/Oracle/Rocky/Alma/openSUSE 为 `rpm, appimage`）
 - **Windows**: `x64`, `arm64`（未指定时自动检测）
 - **macOS**: `intel`, `apple`, `universal`（架构，未指定时自动检测）；`app`, `dmg`（输出格式，默认：`dmg`）
 
@@ -335,6 +335,16 @@ pake https://github.com --name GitHub
 - ARM64 支持让 Pake 应用可以在基于 ARM 的 Linux 设备上运行，包括 Linux 手机（postmarketOS、Ubuntu Touch）、树莓派和其他 ARM64 Linux 系统。
 - 使用 `--target appimage-arm64` 可以创建便携式 ARM64 应用，在不同的 ARM64 Linux 发行版上运行。
 - 在基于 Arch Linux 的发行版上使用 `--targets zst` 可直接生成 `.pkg.tar.zst` 包。Pake 会按 Tauri 的 AUR 打包说明先生成 Linux 包内容，再写入 Arch 包元数据并输出 zstd 压缩包。需要预先安装 `binutils`（提供 `ar`）和 `libarchive`（提供 `bsdtar`）。
+
+#### [no-bundle]
+
+跳过打包，只输出编译好的可执行文件。仅 Linux 可用。适用于 Fedora、RHEL、Oracle Linux 等 RPM 系发行版，这些系统上原生打包器可能在打包阶段中止，用此选项仍能拿到可运行的二进制。
+
+```shell
+pake https://github.com --name GitHub --no-bundle
+```
+
+裸可执行文件会复制到当前目录，命名为 `<name>-binary`。在非 Linux 平台此选项会被忽略。
 
 #### [user-agent]
 

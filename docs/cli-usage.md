@@ -306,7 +306,7 @@ Package the application to support both Intel and M1 chips, exclusively for macO
 
 Specify the build target architecture or format:
 
-- **Linux**: `deb`, `appimage`, `rpm`, `zst`, `deb-arm64`, `appimage-arm64`, `rpm-arm64`, `zst-arm64` (default: `deb`, `appimage`)
+- **Linux**: `deb`, `appimage`, `rpm`, `zst`, `deb-arm64`, `appimage-arm64`, `rpm-arm64`, `zst-arm64` (default: distro-aware, `deb, appimage` on Debian/Ubuntu and `rpm, appimage` on Fedora/RHEL/Oracle/Rocky/Alma/openSUSE)
 - **Windows**: `x64`, `arm64` (auto-detects if not specified)
 - **macOS**: `intel`, `apple`, `universal` (architecture, auto-detects if not specified); `app`, `dmg` (output format, default: `dmg`)
 
@@ -337,6 +337,16 @@ Specify the build target architecture or format:
 - ARM64 support enables Pake apps to run on ARM-based Linux devices, including Linux phones (postmarketOS, Ubuntu Touch), Raspberry Pi, and other ARM64 Linux systems.
 - Use `--target appimage-arm64` for portable ARM64 applications that work across different ARM64 Linux distributions.
 - Use `--targets zst` on Arch Linux based distributions to produce a `.pkg.tar.zst` package directly. Pake follows Tauri's AUR packaging guidance by building the Linux package payload first, then emitting Arch package metadata and zstd-compressed output. Requires `binutils` (for `ar`) and `libarchive` (for `bsdtar`).
+
+#### [no-bundle]
+
+Skip packaging and output only the compiled executable. Linux only. Useful on RPM-based distros (Fedora, RHEL, Oracle Linux, etc.) where the native bundler can abort during the packaging stage, so you still get a runnable binary.
+
+```shell
+pake https://github.com --name GitHub --no-bundle
+```
+
+The raw executable is copied to the current directory as `<name>-binary`. On platforms other than Linux this flag is ignored.
 
 #### [user-agent]
 
