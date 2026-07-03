@@ -55,6 +55,53 @@ Pake/
 
 Keep shared project facts in this file so Codex, Claude Code, and other agents use the same source of truth. `CLAUDE.md` is a symlink to this file, so edit `AGENTS.md` only. Local-only overrides (`CLAUDE.local.md`, `AGENTS.override.md`, `.claude/settings.local.json`) stay ignored.
 
+## Local Hardened Web App Builds
+
+Use these defaults when this local clone is used to package a personal web app, especially for login-heavy sites:
+
+- Build on a per-app branch and use a unique app name and bundle id, such as `Example Hardened` and `com.pake.example.hardened`, so the result does not collide with any installed app.
+- Keep `src-tauri/tauri.conf.json` hardened with `"withGlobalTauri": false`.
+- Keep `src-tauri/capabilities/default.json` without a `remote` block and with `"permissions": []` unless the user explicitly accepts a narrower native bridge.
+- Do not inject Pake's generic helper/style scripts into arbitrary remote sites. In `src-tauri/src/app/window.rs`, prefer only the minimal `window.pakeConfig` initialization unless app-specific injected code has been reviewed.
+- Compile and register only native plugins that are actually needed. Avoid exposing or compiling shell, HTTP download, notification, and OAuth plugins for a plain webview wrapper.
+- Do not enable `--inject`, proxy URLs, certificate-error bypass, drag/drop, or new-window behavior unless the user asks for that capability and the added risk is called out.
+- If doing a smoke launch, use a temporary profile or temporary `HOME` and do not sign into the user's real account unless they explicitly ask.
+- For Slack-like apps that need native polish, keep the bridge app-specific and domain-scoped. Slack notifications and dock badges can use a narrow Slack `remote` capability plus exact notification/window badge permissions.
+- For Slack external links, keep `slack.com` and `*.slack.com` inside the wrapper, but route external `http`/`https` links through a Rust command that parses the URL, rejects Slack hosts and non-web schemes, then opens through the native opener. Custom commands need a matching file under `src-tauri/permissions/` and a hyphenated permission id in `src-tauri/capabilities/default.json`. Do not grant broad `opener:*`, shell, HTTP, or OAuth permissions to the remote page for this.
+- For Google Meet, default to a plain hardened wrapper: no remote IPC capability, no generic injected scripts, and no native notification bridge. Memory measurement is an external acceptance check, not an app feature; use `scripts/measure-macos-app-memory.sh "Google Meet" 5 <samples> <csv> com.pake.googlemeet.hardened pake-googlemeet` and sample baseline, in-call, and post-leave idle. On macOS, WebKit helpers can have `PPID 1`; include helpers by bundle-id cache ownership rather than relying only on child process trees.
+- Google Meet needs hardened-runtime media entitlements in addition to `Info.plist` usage strings. Build it with Pake's `--camera --microphone` flags so the CLI writes `com.apple.security.device.camera` and `com.apple.security.device.audio-input` into `src-tauri/entitlements.plist`; without those flags, macOS may not show Camera/Microphone prompts even though the usage descriptions are present.
+- The Meet RSS sampler is local tooling only. It must not be injected, bundled, or left running after measurement; a normal Meet build should contain no RAM/RSS listener.
+- Slack bridges are intentionally URL-gated in Rust. When switching this local repo between Slack Native and plain apps such as Meet, make sure `src-tauri/capabilities/default.json` matches the current app's bridge needs before building.
+- Spotify's web player has three long-uptime failure modes in a packaged WKWebView, all handled by wrapper code that must stay in place: (1) `sp_dc`/`sp_key` login cookies are session-only, so `src-tauri/src/app/cookie_persist.rs` rewrites them persistent or every quit logs the user out; (2) the Connect "dealer" WebSocket can die half-open — no `close` event, the player never reconnects, the backend expires the device registration, and playback commands return 410 Gone until reload; (3) WebKit's HLS loader can wedge — the media element reports playing with a frozen `currentTime` and a buffer that never refills, unrecoverable from page JS (seek and `load()` both fail). `src-tauri/src/inject/spotify_watchdog.js` (URL-gated to `open.spotify.com` in `window.rs`) force-closes silent dealer sockets to trigger Spotify's own reconnect and does a rate-limited reload on frozen playback or repeated 410s; `apps/spotify/Info.plist` disables App Nap. Spotify keeps its playback element detached from the DOM — diagnose via a `HTMLMediaElement.prototype.play` hook, not `querySelector`.
+
+Typical macOS build flow from the repo root:
+
+```bash
+corepack pnpm@10.26.2 install
+corepack pnpm@10.26.2 run cli:build
+node dist/cli.js "https://example.com" \
+  --name "Example Hardened" \
+  --identifier "com.pake.example.hardened" \
+  --icon src-tauri/icons/icon.icns \
+  --width 1200 \
+  --height 780 \
+  --targets app \
+  --keep-binary
+```
+
+Before handing the app back, verify the generated app-specific config and bundle:
+
+```bash
+jq '.app.withGlobalTauri, .identifier, .productName' src-tauri/.pake/tauri.conf.json
+jq '.windows[0].url, .inject, .proxy_url, .windows[0].enable_drag_drop, .windows[0].ignore_certificate_errors, .windows[0].new_window' src-tauri/.pake/pake.json
+jq '.permissions, has("remote")' src-tauri/capabilities/default.json
+codesign --verify --deep --strict --verbose=4 "Example Hardened.app"
+strings -a -n 8 "Example Hardened.app/Contents/MacOS/<binary-name>" | rg 'window\.__TAURI__|plugin:shell\|open|download_file|send_notification|tauri_plugin_shell|tauri_plugin_http|tauri_plugin_notification|tauri_plugin_oauth'
+spctl --assess --type execute --verbose=4 "Example Hardened.app" || true
+```
+
+For ad-hoc local builds, `codesign --verify` should pass and `spctl` may reject the app because it is not Developer ID signed or notarized. Treat that as expected unless the user asked for a notarized distributable.
+
 ## Code Conventions
 
 - No Chinese comments in any source (Rust / TypeScript / any file). Comments and identifiers in English; follow the existing language of surrounding prose.

@@ -20,10 +20,7 @@ const WEBKIT_DISABLE_COMPOSITING_MODE: &str = "WEBKIT_DISABLE_COMPOSITING_MODE";
 const GDK_BACKEND: &str = "GDK_BACKEND";
 
 use app::{
-    invoke::{
-        clear_dock_badge, download_file, increment_dock_badge, send_notification, set_dock_badge,
-        set_dock_badge_label, set_zoom, update_theme_mode,
-    },
+    external_links::{is_slack_url, open_external_url},
     setup::{set_global_shortcut, set_system_tray},
     window::{open_additional_window_safe, set_window, MultiWindowState},
 };
@@ -149,6 +146,10 @@ pub fn run_app() {
     let multi_instance = pake_config.multi_instance;
     let multi_window = pake_config.multi_window;
     let _enable_find = pake_config.windows[0].enable_find;
+    let enable_slack_native_bridge = pake_config
+        .windows
+        .first()
+        .is_some_and(|window| window.url_type == "web" && is_slack_url(&window.url));
 
     let window_state_plugin = WindowStatePlugin::default()
         .with_state_flags(if init_fullscreen {
@@ -164,11 +165,11 @@ pub fn run_app() {
     #[allow(deprecated)]
     let mut app_builder = tauri_app
         .plugin(window_state_plugin)
-        .plugin(tauri_plugin_oauth::init())
-        .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_opener::init()); // Add this
+        .plugin(tauri_plugin_opener::init());
+
+    if enable_slack_native_bridge {
+        app_builder = app_builder.plugin(tauri_plugin_notification::init());
+    }
 
     // Only add single instance plugin if multiple instances are not allowed
     if !multi_instance {
@@ -186,16 +187,7 @@ pub fn run_app() {
     }
 
     app_builder
-        .invoke_handler(tauri::generate_handler![
-            download_file,
-            send_notification,
-            increment_dock_badge,
-            set_dock_badge,
-            set_dock_badge_label,
-            clear_dock_badge,
-            update_theme_mode,
-            set_zoom,
-        ])
+        .invoke_handler(tauri::generate_handler![open_external_url])
         .setup(move |app| {
             app.manage(MultiWindowState::new(
                 pake_config.clone(),

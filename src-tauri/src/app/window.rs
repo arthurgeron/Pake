@@ -7,6 +7,7 @@ use std::{
     str::FromStr,
     sync::atomic::{AtomicU32, Ordering},
 };
+use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::{
     webview::{DownloadEvent, NewWindowFeatures, NewWindowResponse},
     AppHandle, Config, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
@@ -239,7 +240,12 @@ fn build_window(
 
     window_builder = window_builder
         .always_on_top(window_config.always_on_top)
-        .incognito(window_config.incognito);
+        .incognito(window_config.incognito)
+        // Keep JS timers and WebSockets alive when the window is occluded/backgrounded.
+        // Web apps like Spotify silently refresh a short-lived access token on a timer and
+        // hold a WebSocket for playback state; WebKit's default background throttling can
+        // suspend both overnight, which expires the session and forces a re-login on restart.
+        .background_throttling(BackgroundThrottlingPolicy::Disabled);
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
@@ -285,28 +291,30 @@ fn build_window(
         });
     }
 
-    // Add initialization scripts. Order matters: pakeConfig must land before
-    // any script that reads it (e.g. fullscreen polyfill checks for an opt-out
-    // flag), and toast must register `window.pakeToast` before Rust code
-    // calls show_toast().
+    // Hardened build: keep only the minimal config needed by native menu
+    // actions. Do not inject Pake's generic page-modifying scripts into the
+    // remote site.
     window_builder = window_builder.initialization_script(&config_script);
 
-    // find.js is opt-in via --enable-find and no-ops at runtime when disabled,
-    // so only inject its ~700 lines when the feature is on. Avoids parsing the
-    // find UI on every page load in the common (find-off) case. Matches the
-    // enable_find gating already applied to the Find menu item.
-    if window_config.enable_find {
-        window_builder = window_builder.initialization_script(include_str!("../inject/find.js"));
+    if window_config.url_type == "web"
+        && crate::app::external_links::is_slack_url(&window_config.url)
+    {
+        window_builder = window_builder
+            .initialization_script(include_str!("../inject/slack_badge.js"))
+            .initialization_script(include_str!("../inject/slack_links.js"));
     }
 
-    window_builder = window_builder
-        .initialization_script(include_str!("../inject/toast.js"))
-        .initialization_script(include_str!("../inject/fullscreen.js"))
-        .initialization_script(include_str!("../inject/event.js"))
-        .initialization_script(include_str!("../inject/style.js"))
-        .initialization_script(include_str!("../inject/theme_refresh.js"))
-        .initialization_script(include_str!("../inject/auth.js"))
-        .initialization_script(include_str!("../inject/custom.js"));
+    // Spotify's web player never recovers from a silently-dead Connect
+    // WebSocket (device registration expires server-side, playback commands
+    // return 410 Gone) or from a wedged WebKit media loader after long
+    // uptime. The watchdog detects both and recovers via a reconnect nudge
+    // or a rate-limited reload.
+    if window_config.url_type == "web"
+        && crate::app::external_links::is_spotify_url(&window_config.url)
+    {
+        window_builder =
+            window_builder.initialization_script(include_str!("../inject/spotify_watchdog.js"));
+    }
 
     #[cfg(target_os = "windows")]
     let mut windows_browser_args = String::from("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-blink-features=AutomationControlled");
@@ -496,7 +504,14 @@ fn build_window(
 
     window_builder = window_builder.on_navigation(|_| true);
 
-    window_builder.build()
+    let window = window_builder.build()?;
+
+    // Keep session-only login cookies (e.g. Spotify's `sp_dc`) persistent across
+    // restarts; WKWebView would otherwise drop them on quit and log the user out.
+    #[cfg(target_os = "macos")]
+    crate::app::cookie_persist::start(window.clone());
+
+    Ok(window)
 }
 
 #[cfg(all(test, target_os = "windows"))]

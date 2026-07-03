@@ -28,10 +28,7 @@ tauri = { version = "2.10.2", features = [
   "macos-proxy",
 ] }
 tauri-plugin-window-state = "2.4.1"
-tauri-plugin-oauth = "2.0.0"
-tauri-plugin-http = "2.5.7"
 tauri-plugin-global-shortcut = { version = "2.3.1" }
-tauri-plugin-shell = { version = "2.3.5" }
 tauri-plugin-opener = { version = "2.5.3" }
 tauri-plugin-single-instance = "2.4.0"
 tauri-plugin-notification = "2.3.3"
@@ -40,6 +37,7 @@ tauri-plugin-notification = "2.3.3"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSDockTile"] }
 objc2-foundation = { version = "0.3", features = ["NSString"] }
+block2 = "0.6"
 
 [features]
 # this feature is used for development builds from development cli

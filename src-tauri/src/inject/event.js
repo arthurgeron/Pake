@@ -295,6 +295,8 @@ function openAuthNavigation(originalWindowOpen, url, name, specs) {
 
 document.addEventListener("DOMContentLoaded", () => {
   const tauri = window.__TAURI__;
+  if (!tauri?.window || !tauri?.core) return;
+
   const appWindow = tauri.window.getCurrentWindow();
   const invoke = tauri.core.invoke;
   const pakeConfig = window["pakeConfig"] || {};
