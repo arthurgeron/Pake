@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pake-capability",
+  "description": "Plain hardened webview with no remote IPC permissions.",
+  "webviews": ["pake"],
+  "permissions": []
+}

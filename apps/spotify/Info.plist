@@ -1,0 +1,10 @@
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- App Nap can suspend the WebKit media/networking stack while the
+         window sits idle for hours; observed as a wedged HLS loader and a
+         half-open Connect WebSocket. -->
+    <key>LSAppNapIsDisabled</key>
+    <true/>
+  </dict>
+</plist>
