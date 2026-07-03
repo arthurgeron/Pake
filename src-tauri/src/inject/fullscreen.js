@@ -9,9 +9,14 @@
   if (window.__PAKE_FULLSCREEN_POLYFILL__) return;
   window.__PAKE_FULLSCREEN_POLYFILL__ = true;
 
+  let initAttempts = 0;
+
   function initFullscreenPolyfill() {
     if (!window.__TAURI__ || !document.head) {
-      setTimeout(initFullscreenPolyfill, 100);
+      if (initAttempts < 20) {
+        initAttempts += 1;
+        setTimeout(initFullscreenPolyfill, 100);
+      }
       return;
     }
 
