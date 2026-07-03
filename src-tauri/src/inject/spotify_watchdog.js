@@ -8,12 +8,15 @@
 //    the device registration, and every playback command is rejected with
 //    410 Gone until the page is reloaded.
 // 2. WebKit's HLS segment loader wedges: the media element reports playing
-//    while `currentTime` stays frozen and the buffer never refills.
+//    while `currentTime` stays frozen and the buffer never refills. Before
+//    freezing, the clock can also race — media time advancing several times
+//    faster than wall time with no audible output — which burns through the
+//    queue as tracks "finish" in seconds.
 //
 // Remedies, least destructive first: a dealer socket silent past
 // DEALER_SILENCE_MS is force-closed so Spotify's own reconnect logic
-// re-registers the device; frozen playback or repeated 410s trigger a
-// rate-limited page reload.
+// re-registers the device; a frozen or racing playback clock, or repeated
+// 410s, triggers a rate-limited page reload.
 (function () {
   'use strict';
 
@@ -85,6 +88,12 @@
   HTMLMediaElement.prototype.play = function () {
     if (mediaElements.indexOf(this) < 0) {
       mediaElements.push(this);
+      var el = this;
+      // Seeks legitimately jump currentTime; flag them so the racing-clock
+      // check skips intervals that contain one.
+      el.addEventListener('seeking', function () {
+        el.__pakeSeeked = true;
+      });
     }
     return nativePlay.apply(this, arguments);
   };
@@ -117,8 +126,10 @@
   };
 
   var frozenChecks = 0;
+  var racingChecks = 0;
   var lastElement = null;
   var lastCurrentTime = -1;
+  var lastCheckAt = 0;
   setInterval(function () {
     var now = Date.now();
 
@@ -159,6 +170,27 @@
     } else {
       frozenChecks = 0;
     }
+
+    var wallSeconds = lastCheckAt ? (now - lastCheckAt) / 1000 : 0;
+    if (playing && playing === lastElement && wallSeconds > 0) {
+      var seeked = playing.__pakeSeeked;
+      playing.__pakeSeeked = false;
+      var mediaDelta = playing.currentTime - lastCurrentTime;
+      var expected = wallSeconds * (playing.playbackRate || 1);
+      if (!seeked && mediaDelta > expected * 2 + 5) {
+        racingChecks += 1;
+        if (racingChecks >= 2) {
+          racingChecks = 0;
+          reload('media clock racing ahead of wall time');
+        }
+      } else {
+        racingChecks = 0;
+      }
+    } else {
+      racingChecks = 0;
+    }
+
+    lastCheckAt = now;
     lastElement = playing;
     lastCurrentTime = playing ? playing.currentTime : -1;
   }, CHECK_INTERVAL_MS);
